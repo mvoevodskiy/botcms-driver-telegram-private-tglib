@@ -595,7 +595,7 @@ class TelegramPrivate {
         (async () => this.Transport.invoke({ _: 'getUser', user_id: userId })
           .then(response => {
             if (response._ === 'user') {
-              result.username = response.usernames?.editable_username
+              result.username = response.usernames?.editable_username || null
               result.first_name = response.first_name
               result.last_name = response.last_name
             }
@@ -737,7 +737,7 @@ class TelegramPrivate {
     if (response._ === 'user') {
       this.user = {
         id: response.id,
-        username: response.usernames?.editable_username,
+        username: response.usernames?.editable_username || null,
         first_name: response.first_name,
         last_name: response.last_name
       }
