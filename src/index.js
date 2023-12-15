@@ -1,6 +1,5 @@
 const { Client } = require('tdl')
 const { TDLib } = require('tdl-tdlib-addon')
-const mt = require('mvtools')
 
 // /** @typedef {Object<import('botcms').Message>} Message */
 /** @typedef {import('botcms').MessageElements} MessageElement */
@@ -167,9 +166,9 @@ class TelegramPrivate {
           messageId = message.id
           messageText = this.MT.extract('content.text.text', message, '')
           messageDate = message.date
-          senderId = message.sender.user_id === this.user.id
+          senderId = message.sender_id.user_id === this.user.id
             ? this.BC.SELF_SEND
-            : (message.sender._ === 'messageSenderUser' ? message.sender.user_id : 0)
+            : (message.sender_id._ === 'messageSenderUser' ? message.sender_id.user_id : 0)
           chatId = message.chat_id
           if (parseInt(chatId) < 0) {
             chatType = message.isChannelPost ? 'channel' : 'chat'
@@ -596,7 +595,7 @@ class TelegramPrivate {
         (async () => this.Transport.invoke({ _: 'getUser', user_id: userId })
           .then(response => {
             if (response._ === 'user') {
-              result.username = response.username
+              result.username = response.usernames?.editable_username
               result.first_name = response.first_name
               result.last_name = response.last_name
             }
@@ -644,12 +643,12 @@ class TelegramPrivate {
       console.log('TGPVT. RESOLVE CHAT. USERNAME', username)
       response = await this.Transport.invoke({ _: 'searchPublicChat', username }).catch((e) => console.error(e))
     }
-    console.log('RESOLVE_CHAT. RESPONSE:', response)
+    // console.log('RESOLVE_CHAT. RESPONSE:', response)
     return response
   }
 
   async prepareChatInfo (chat) {
-    console.log('PREPARE CHAT:', chat)
+    // console.log('PREPARE CHAT:', chat)
     const result = {
       id: chat.id,
       title: chat.title
@@ -738,7 +737,7 @@ class TelegramPrivate {
     if (response._ === 'user') {
       this.user = {
         id: response.id,
-        username: response.username,
+        username: response.usernames?.editable_username,
         first_name: response.first_name,
         last_name: response.last_name
       }
@@ -784,7 +783,7 @@ class TelegramPrivate {
       // console.log('TGPVT. JOIN CHAT. IS NOT JOIN LINK')
       const chat = await this.resolveChat(chatIdOrLink)
       // console.log('TGPVT. JOIN CHAT. CHAT BASE INFO', chat.response)
-      if (chat._ === 'chat') {
+      if (chat !== undefined && chat._ === 'chat') {
         const response = await this.Transport.invoke({ _: 'joinChat', chat_id: chat.id })
         // console.log('TGPVT. JOIN CHAT. JOIN RESULT', response)
         if (response._ === 'ok') chatId = chat.id

@@ -1,6 +1,6 @@
 {
   "name": "botcms-driver-telegram-private-tglib",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "",
   "main": "src/index.js",
   "scripts": {
@@ -14,8 +14,8 @@
     "mvtools": "^1.1.4"
   },
   "dependencies": {
-    "tdl": "^7.0.0",
-    "tdl-tdlib-addon": "^1.0.1"
+    "tdl": "^7.4.0",
+    "tdl-tdlib-addon": "^1.2.2"
   },
   "devDependencies": {
     "tdlib-types": "^0.1001007.1"
