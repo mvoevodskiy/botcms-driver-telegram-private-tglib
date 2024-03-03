@@ -466,7 +466,7 @@ class TelegramPrivate {
         const state = this.MT.extract('message.sendingState', update, null)
         // console.log('SENDING STATE', state, )
         if (!state) {
-          await this.messageCallback(update)
+          setImmediate(() => this.messageCallback(update).catch(e => console.error('MASSAGE CALLBACK FAILURE:', e)))
         }
       }
       if (oldId) {
