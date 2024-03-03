@@ -1,5 +1,4 @@
-const { Client } = require('tdl')
-const { TDLib } = require('tdl-tdlib-addon')
+const tdl = require('tdl')
 
 // /** @typedef {Object<import('botcms').Message>} Message */
 /** @typedef {import('botcms').MessageElements} MessageElement */
@@ -62,12 +61,17 @@ class TelegramPrivate {
     this.pendingIds = {}
     // console.log('TG PVT. TDLIB. CONFIG:', this.config)
 
-    this.Transport = new Client(new TDLib(this.config.command), {
+    tdl.configure({
+      tdjson: this.config.command
+    })
+
+    // this.Transport = new Client(new TDLib(this.config.command), {
+    this.Transport = tdl.createClient({
       apiId: this.config.apiId, // specify your API ID
       apiHash: this.config.apiHash, // specify your API Hash
       databaseDirectory: this.config.databaseDirectory, // specify your database directory
-      filesDirectory: this.config.filesDirectory // specify your database directory
-      // verbosityLevel: 2, // specify TDLib verbosity level to control logging, default 2
+      filesDirectory: this.config.filesDirectory, // specify your database directory
+      verbosityLevel: 2 // specify TDLib verbosity level to control logging, default 2
       // tdlibParameters: {}, // specify custom tdlibParameters object
 
       // Node only options
