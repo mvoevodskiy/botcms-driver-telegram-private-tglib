@@ -675,7 +675,7 @@ class TelegramPrivate {
             .then(response => {
               // console.log('SUPER GROUP INFO:', response)
               if (response._ === 'supergroup') {
-                result.username = response.username
+                result.username = response.usernames?.editable_username || response.username || null
               }
             })
             .catch(e => console.error('GET SUPER GROUP FOR CHAT ID', superGroupId, 'FAILURE:', e)))(),
