@@ -1,4 +1,9 @@
 const tdl = require('tdl')
+const path = require('path')
+const fs = require('fs')
+
+let msgPreparingCounter = 0; let msgProcessingCounter = 0; let msgAllCounter = 0
+const received = {}
 
 // /** @typedef {Object<import('botcms').Message>} Message */
 /** @typedef {import('botcms').MessageElements} MessageElement */
@@ -46,10 +51,13 @@ class TelegramPrivate {
       useChatInfoDatabase: true,
       useMessageDatabase: true,
       joinLinkBegins: ['https://t.me/joinchat/', 'https://telegram.me/joinchat/', 'https://telegram.dog/joinchat/', 'https://t.me/+', 'https://telegram.me/+', 'https://telegram.dog/+'],
-      linkBegins: ['t.me/', 'https://t.me/', '@']
+      linkBegins: ['t.me/', 'https://t.me/', '@'],
+      idFile: 'user.id',
+      idFilePath: ''
       // sessionHandler: SessionManager,
     }
     this.config = this.BC.MT.mergeRecursive(this.defaults, params)
+    if (this.config.idFilePath === '') this.config.idFilePath = path.join(this.config.databaseDirectory, this.config.idFile)
     this.name = this.config.name
     this.driverName = this.config.driverName
     this.humanName = this.config.humanName
@@ -71,8 +79,12 @@ class TelegramPrivate {
       apiHash: this.config.apiHash, // specify your API Hash
       databaseDirectory: this.config.databaseDirectory, // specify your database directory
       filesDirectory: this.config.filesDirectory, // specify your database directory
-      verbosityLevel: 2 // specify TDLib verbosity level to control logging, default 2
-      // tdlibParameters: {}, // specify custom tdlibParameters object
+      verbosityLevel: 2, // specify TDLib verbosity level to control logging, default 2
+      tdlibParameters: {
+        use_file_database: false,
+        use_chat_info_database: false,
+        use_message_database: false
+      } // specify custom tdlibParameters object
 
       // Node only options
       // appDir: this.config.databaseDirectory, // specify where to place tglib files, default "__tglib__" folder
@@ -92,15 +104,15 @@ class TelegramPrivate {
       }
     }
 
-    this.waitUser = async (n = 0) => {
+    this.waitUser = async (n = 0, caller = '') => {
       // return this.user
-      if (n > 0 && n % 500 === 0) console.debug('TGPVT', this.name, 'WAITING USER (getMe). CURRENT ID:', this.user.id, 'N:', n)
+      if (n > 0 && n % 500 === 0) console.debug('TGPVT', this.name, 'WAITING USER (getMe). CURRENT ID:', this.user.id, 'N:', n, 'CALLER:', caller)
       if (this.user.id !== 0) {
         return this.user
       } else {
         await this.MT.sleep(5)
         n++
-        return this.waitUser(n)
+        return this.waitUser(n, caller)
       }
     }
   }
@@ -121,8 +133,14 @@ class TelegramPrivate {
 
   async messageCallback (update) {
     const ctx = { update }
+    let prepared = false
+    let processed = false
+    const started = Date.now()
+    const _log = []
+    const log = (...msg) => _log.push(Array.isArray(msg) ? msg : msg[0])
     // console.dir(ctx.update, { depth: 5 })
     try {
+      log('Event', ctx.update._)
       const ctxConfig = {
         useSession: this.config.sessionStart
       }
@@ -147,25 +165,42 @@ class TelegramPrivate {
       let fwSenderId
       let attachment
       let entities = []
+      let updateId
       const sizes = {}
+      log('Variables initialized')
 
       switch (ctx.update._) {
         case 'updateNewMessage':
-          // case 'updateMessageContent':
-          // case 'updateChatLastMessage':
+        // case 'updateMessageContent':
+        case 'updateChatLastMessage':
+          msgPreparingCounter++
+          msgProcessingCounter++
+          msgAllCounter++
+          console.log('All messages:', msgAllCounter, 'Preparing messages:', msgPreparingCounter, 'Processing messages:', msgProcessingCounter)
+          log('Counters', 'preparing', msgPreparingCounter, 'processing', msgProcessingCounter)
           if ('old_message_id' in ctx.update) {
             this.pendingIds[ctx.update.old_message_id] = ctx.update.message.id
           }
-          await this.waitUser()
-          message = update.message
+          log('Before waitUser')
+          await this.waitUser(0, 'messageCallback')
+          log('After waitUser')
+          message = update.message || update.last_message
+          if (message === undefined) {
+            log('Empty message in update. Skip')
+            msgPreparingCounter--
+            msgProcessingCounter--
+            prepared = true
+            processed = true
+            throw new Error('Empty message. It\'s normally')
+          }
           // for (const type of ['message', 'messageContent', 'lastMessage']) {
           //   if (type === ctx.update._) {
           //     message = update[type] || update.message
           //     break
           //   }
           // }
-          console.log('MESSAGE:', message)
-          if ('reply_markup' in message) console.log('REPLY MARKUP:', message.reply_markup.rows)
+          // console.log('MESSAGE:', message)
+          // if ('reply_markup' in message) console.log('REPLY MARKUP:', message.reply_markup.rows)
           // console.log('MESSAGE CALLBACK. ID: ', message.id)
           messageId = message.id
           messageText = this.MT.extract('content.text.text', message, '')
@@ -174,12 +209,21 @@ class TelegramPrivate {
             ? this.BC.SELF_SEND
             : (message.sender_id._ === 'messageSenderUser' ? message.sender_id.user_id : 0)
           chatId = message.chat_id
+
+          updateId = chatId + ':' + messageId
+          if (updateId in received) {
+            prepared = true
+            processed = true
+            throw new Error('Update processed by other event')
+          } else received[updateId] = true
+
           if (parseInt(chatId) < 0) {
             chatType = message.isChannelPost ? 'channel' : 'chat'
           }
           if (message.reply_to_message_id) {
             replyId = message.reply_to_message_id
           }
+          log('filled base variables')
           fwSenderId = this.BC.MT.extract('forward_info.origin.sender_user_id', message, 0)
           if (fwSenderId) {
             bcContext.Message.handleForwarded({
@@ -190,6 +234,7 @@ class TelegramPrivate {
             })
             bcContext.Message.author.id = fwSenderId
           }
+          log('handled forwarded')
 
           /**
            * ENTITIES, TEXT
@@ -209,6 +254,7 @@ class TelegramPrivate {
               messageText = message.content.caption.text
               break
           }
+          log('handled text, entities')
 
           switch (message.content._) {
             case 'messagePhoto':
@@ -231,6 +277,7 @@ class TelegramPrivate {
               }
               bcContext.Message.handleAttachment(attachment)
           }
+          log('handled photos (thumbs)')
           // console.log(bcContext.Message.forwarded);
           // console.log(bcContext.Message.attachments.photo);
 
@@ -238,6 +285,7 @@ class TelegramPrivate {
 
         case 'updateDeleteMessages':
           if (ctx.update.from_cache) {
+            log('Delete from cache. Return')
             return
           }
           // for (const type of ['updateDeleteMessages']) {
@@ -260,21 +308,31 @@ class TelegramPrivate {
             chatType = update.is_channel_post ? 'channel' : 'chat'
             event = EVENTS.CHAT_MESSAGE_REMOVE
           }
+          log('Delete. All prepared')
       }
+
+      // console.log('[TGPVT ' + this.name + '] Message callback. Event:', event, ' [TG] ' + ctx.update._)
 
       if (event === '' && messageText !== '') {
         event = chatId < 0 ? EVENTS.CHAT_MESSAGE_NEW : EVENTS.MESSAGE_NEW
       }
+      log('Event:', event)
 
       if (event !== '') {
         bcContext.Message.chat = {
           id: chatId,
           type: chatType
         }
+        const userInfo = await this.fetchUserInfo(senderId)
         bcContext.Message.sender = {
           id: senderId,
-          isBot
+          isBot,
+          username: userInfo.username,
+          firstName: userInfo.first_name,
+          lastName: userInfo.last_name,
+          usernames: userInfo.usernames || {}
         }
+        log('Filled message sender:', bcContext.Message.sender)
         bcContext.Message.id = messageId
         bcContext.Message.ids = messageIds
         bcContext.Message.date = messageDate
@@ -282,18 +340,35 @@ class TelegramPrivate {
         bcContext.Message.edited = edited
         bcContext.Message.event = event
         bcContext.Message.reply.id = replyId
+        log('Filled Message-s base properties')
         if (entities.length) {
           this.fillMessageElements(entities, bcContext.Message)
           // console.log('MESSAGE ELEMENTS: ', bcContext.Message.getElements())
         }
+        log('Filled message elements')
         if ('reply_markup' in message) {
           this.fillMessageKeyboard(message.reply_markup, bcContext.Message)
         }
+        log('Filled message keyboard')
         bcContext.Message.personal = chatType === 'user' || bcContext.Message.elements.containsPersonal(String(this.user.id), this.user.username)
         // console.log('MESSAGE IS PERSONAL? ', bcContext.Message.personal)
-        // console.log('MESSAGE CALLBACK. MSG EVENT ', event, ' ID ', messageId);
-        const result = bcContext.process().catch(e => { console.error('[TGPVT ' + this.name + '] ERROR IN CTX PROCESS:', e) })
+        // console.log('MESSAGE CALLBACK. MSG EVENT ', event, ' ID ', messageId)
+        log('Personal?', bcContext.Message.personal)
+        log('Prepared.')
+        if (ctx.update._ === 'updateNewMessage' || ctx.update._ === 'updateChatLastMessage') {
+          msgPreparingCounter--
+          log('Preparing counter deccreased')
+        }
+        prepared = true
+        const result = await bcContext.process().catch(e => { console.error('[TGPVT ' + this.name + '] ERROR IN CTX PROCESS:', e) })
+        log('Processed', result)
+        if (ctx.update._ === 'updateNewMessage' || ctx.update._ === 'updateChatLastMessage') {
+          msgProcessingCounter--
+          log('Processing counter deccreased')
+        }
         if (this.config.readProcessed && chatId && messageId) {
+          console.log('TG. Mark message ' + chatId + ':' + messageId + ' viewed')
+          log('Read processed queued')
           setImmediate(
             () => this.Transport.invoke({
               _: 'viewMessages',
@@ -303,11 +378,20 @@ class TelegramPrivate {
             })
           )
         }
+        processed = true
+        console.log('Processing time:', String(Math.round((Date.now() - started) * 1000) / 1000) + ' ms')
         return result
       }
+      processed = true
     } catch (e) {
-      console.error('[TGPVT ' + this.name + '] ERROR WHILE PREPARE OR PROCESSING UPDATE:', e)
+      if (!processed) console.error('[TGPVT ' + this.name + '] ERROR WHILE PREPARE OR PROCESSING UPDATE:', e, 'Original update:', update)
       return null
+    } finally {
+      if (!processed) {
+        console.log('Processing time:', String(Math.round((Date.now() - started) * 1000) / 1000) + ' ms')
+        console.error('Not processed update. Prepared?', prepared, 'Log:', _log)
+        console.dir(update, { depth: 6 })
+      }
     }
   }
 
@@ -404,7 +488,7 @@ class TelegramPrivate {
           for (const rawButton of rawRow) {
             /** @type {KeyboardButton} */
             const button = { text: rawButton.text, data: {}, query: {} }
-            console.log('RAW BUTTON:', rawButton)
+            // console.log('RAW BUTTON:', rawButton)
             switch (rawButton.type._) {
               case 'keyboardButtonTypeRequestPhoneNumber':
                 button.data.requestPhone = true
@@ -475,7 +559,7 @@ class TelegramPrivate {
       // }
     })
     this.Transport.on('error', async (error) => {
-      console.log('[error]', error)
+      console.error('[error]', error)
     })
   }
 
@@ -584,9 +668,9 @@ class TelegramPrivate {
   }
 
   async fetchUserInfo (userId, bcContext = null) {
-    console.log('FETCH USER INFO. USER ID ', userId, ' CTX MSG ID ', this.MT.extract('Message.id', bcContext))
+    // console.log('FETCH USER INFO. USER ID ', userId, ' CTX MSG ID ', this.MT.extract('Message.id', bcContext))
     let result = { id: userId }
-    await this.waitUser()
+    await this.waitUser(0, 'fetchUserInfo')
     if (userId === this.BC.SELF_SEND || userId === 0 || userId === undefined) {
       result = {
         id: this.user.id,
@@ -599,11 +683,18 @@ class TelegramPrivate {
         (async () => this.Transport.invoke({ _: 'getUser', user_id: userId })
           .then(response => {
             if (response._ === 'user') {
+              // console.log('[Fetch user info TG response for ', userId, ' in JSON:', JSON.stringify(response))
               result.username = response.usernames?.editable_username || null
               result.first_name = response.first_name
               result.last_name = response.last_name
+              result.usernames = {
+                active: response.usernames?.active_usernames || [],
+                disabled: response.usernames?.disabled_usernames || []
+              }
+            } else {
+              // console.log('TG getUser response:', response)
             }
-          }))()
+          }).catch(e => console.error('Fetch user info failed. Catched error:', e)))()
         // (async () => this.Transport.invoke({ _: 'getUserFullInfo', user_id: userId })
         //   .then(response => {
         //     // console.log(response);
@@ -618,7 +709,7 @@ class TelegramPrivate {
   }
 
   async fetchChatInfo (chatId, bcContext = null) {
-    console.log('TG PVT. FETCH CHAT INFO. CHAT ID:', chatId)
+    // console.log('TG PVT. FETCH CHAT INFO. CHAT ID:', chatId)
     let result = { id: chatId }
     // chatId = parseInt(chatId)
     const response = await this.resolveChat(chatId)
@@ -634,7 +725,7 @@ class TelegramPrivate {
     let response
     const intChatId = parseInt(chatId)
     const isId = !isNaN(intChatId) && String(chatId) === String(intChatId)
-    console.log('TGPVT. RESOLVE CHAT. INT CHAT ID', intChatId, 'IS ID?', isId)
+    // console.log('TGPVT. RESOLVE CHAT. INT CHAT ID', intChatId, 'IS ID?', isId)
     if (isId) {
       response = await this.Transport.invoke({
         _: 'getChat',
@@ -645,7 +736,10 @@ class TelegramPrivate {
       let username = String(chatId)
       for (const begin of this.config.linkBegins) username = username.replace(begin, '')
       console.log('TGPVT. RESOLVE CHAT. USERNAME', username)
-      response = await this.Transport.invoke({ _: 'searchPublicChat', username }).catch((e) => console.error(e))
+      response = await this.Transport.invoke({ _: 'searchPublicChat', username }).catch((e) => {
+        console.error(e)
+        throw e
+      })
     }
     // console.log('RESOLVE_CHAT. RESPONSE:', response)
     return response
@@ -668,7 +762,7 @@ class TelegramPrivate {
         break
       case 'chatTypeSupergroup':
         chatType = chat.type.isChannel ? 'channel' : 'chat'
-        console.log('SUPER GROUP ID:', superGroupId)
+        // console.log('SUPER GROUP ID:', superGroupId)
         await Promise.all([
           // (async () => this.Transport.invoke({ _: 'getSupergroup', supergroup_id: chat.type.supergroupId })
           (async () => this.Transport.invoke({ _: 'getSupergroup', supergroup_id: superGroupId })
@@ -710,14 +804,14 @@ class TelegramPrivate {
     let loggedIn = true
     await this.Transport.login(() => ({
       getPhoneNumber: async retry => retry
-        ? Promise.reject('Invalid phone number')
+        ? Promise.reject(new Error('Invalid phone number'))
         : Promise.resolve(this.config.phone),
       getAuthCode: async retry => {
         // console.log('GET AUTH CODE. RETRY?', retry, 'CONFIG CODE: ', typeof this.config.code, ')', this.config.code)
-        return retry ? Promise.reject('Invalid auth code') : Promise.resolve(this.config.code)
+        return retry ? Promise.reject(new Error('Invalid auth code')) : Promise.resolve(this.config.code)
       },
       getPassword: async (passwordHint, retry) => retry
-        ? Promise.reject('Invalid password')
+        ? Promise.reject(new Error('Invalid password'))
         : Promise.resolve(this.config.password),
       getName: async () =>
         Promise.resolve({ firstName: 'John', lastName: 'Doe' })
@@ -727,7 +821,8 @@ class TelegramPrivate {
     })
     console.log('TG PVT. LAUNCH.', this.name, 'LOGGED IN (?)', loggedIn)
 
-    await this.getMe()
+    this.readUserIdFile()
+    setImmediate(this.getMe.bind(this))
     await this.Transport.invoke({ _: 'getChats', chat_list: { _: 'chatListMain' }, limit: 50 })
     if (this.config.alwaysOnline) {
       setTimeout(this.setOnline, 0)
@@ -736,8 +831,9 @@ class TelegramPrivate {
   }
 
   async getMe () {
+    console.log('TG. Get me started')
     const response = await this.Transport.invoke({ _: 'getMe' })
-    // console.log('GET ME RESPONSE:', response)
+    console.log('GET ME RESPONSE:', response)
     if (response._ === 'user') {
       this.user = {
         id: response.id,
@@ -745,6 +841,7 @@ class TelegramPrivate {
         first_name: response.first_name,
         last_name: response.last_name
       }
+      this.writeIdFile()
       console.log(this.user)
     } else {
       console.error('TG PVT', this.name, '. GET ME ERROR', response)
@@ -804,6 +901,20 @@ class TelegramPrivate {
     let result = false
     for (const begin of this.config.joinLinkBegins) if (joinLink.startsWith(begin)) result = true
     return result
+  }
+
+  readUserIdFile () {
+    if (this.user.id === 0 || this.user.id === '0') {
+      if (fs.existsSync(this.config.idFilePath)) {
+        const userId = fs.readFileSync(this.config.idFilePath)
+        if (userId !== '0') this.user.id = userId
+      }
+    }
+    return this.user.id
+  }
+
+  writeIdFile () {
+    fs.writeFileSync(this.config.idFilePath, String(this.user.id))
   }
 }
 
